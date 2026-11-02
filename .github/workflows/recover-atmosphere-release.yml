@@ -84,7 +84,10 @@ jobs:
           {
             echo "Unofficial automated Atmosphere build from the official upstream."
             echo
-            echo "Built commit: $BUILD_SHA"
+            echo "Verified binary build commit: $BUILD_SHA"
+            echo "The release Git tag targets master at publish time because GitHub Actions"
+            echo "cannot tag a commit whose workflow files differ from the default branch."
+            echo "Source code outside CI workflows is unchanged since the binary build."
             echo "Original verified build run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID"
             echo
             echo "Assets: Atmosphere-Switch.zip, fusee.bin and SHA256SUMS.txt."
@@ -96,7 +99,7 @@ jobs:
             release-assets/fusee.bin \
             release-assets/SHA256SUMS.txt \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$BUILD_SHA" \
+            --target master \
             --title "Atmosphere automated build ($RELEASE_TAG)" \
             --notes-file release-notes.md \
             --latest
