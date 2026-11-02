@@ -98,7 +98,7 @@ jobs:
             --volume "$PWD:/source" \
             --workdir /source \
             atmosphere-build-ci \
-            bash -lc 'set -euo pipefail; make -j2 dist-no-debug-nx_release'
+            bash -lc 'set -euo pipefail; git config --global --add safe.directory /source; make -j2 dist-no-debug-nx_release'
 
       - name: Verify package3, fusee and all required contents
         shell: bash
@@ -112,7 +112,7 @@ jobs:
             exit 1
           fi
           for required in atmosphere/package3 atmosphere/reboot_payload.bin switch/daybreak.nro switch/haze.nro switch/reboot_to_payload.nro; do
-            unzip -Z1 "$archive" | grep -Fxq "$required" || {
+            unzip -Z1 "$archive" | grep -Fx "$required" > /dev/null || {
               echo "Missing required archive entry: $required"
               exit 1
             }
