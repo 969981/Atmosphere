@@ -94,9 +94,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # In parallel builds the recursive Make can start before ROMFS shaders
-          # exist. Make the build directory depend on generated shader targets.
-          # This only patches CI's checkout, not the committed upstream source.
+          # Haze's recursive build starts concurrently with ROMFS shader generation
+          # under make -j2. The submake has no rule to generate the .dksh itself.
+          # Patch only the CI checkout; leave upstream sources unchanged in Git.
           python3 - <<'PY'
           from pathlib import Path
           path = Path("troposphere/haze/Makefile")
