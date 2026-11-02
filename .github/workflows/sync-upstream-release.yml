@@ -175,7 +175,7 @@ jobs:
           test -s release-assets/Atmosphere-Switch.zip
           test -s release-assets/fusee.bin
           test -s release-assets/SHA256SUMS.txt
-          (cd release-assets && sha256sum -c SHA256SUMS.txt)
+          sha256sum -c release-assets/SHA256SUMS.txt
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Already released: $TAG"
             exit 0
