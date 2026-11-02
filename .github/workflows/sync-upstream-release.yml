@@ -139,7 +139,42 @@ jobs:
           test -s "$fusee"
           cp "$archive" release-assets/Atmosphere-Switch.zip
           cp "$fusee" release-assets/fusee.bin
-          sha256sum release-assets/* > release-assets/SHA256SUMS.txt
+
+      - name: Download official Switchbrew HBLoader and HBMenu releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets/switchbrew
+          gh release download v2.4.5 --repo switchbrew/nx-hbloader \
+            --pattern hbl.nsp --dir release-assets/switchbrew
+          gh release download v3.6.1 --repo switchbrew/nx-hbmenu \
+            --pattern nx-hbmenu_v3.6.1.zip --dir release-assets/switchbrew
+
+          # Pin both official assets to the checksums published by GitHub.
+          test "$(gh api repos/switchbrew/nx-hbloader/releases/tags/v2.4.5 \
+            --jq '.assets[] | select(.name=="hbl.nsp") | .digest')" = \
+            'sha256:853df8526557b82c6b2018a8a102d22e8306687415e49653530dfd9a1d603b32'
+          test "$(gh api repos/switchbrew/nx-hbmenu/releases/tags/v3.6.1 \
+            --jq '.assets[] | select(.name=="nx-hbmenu_v3.6.1.zip") | .digest')" = \
+            'sha256:4790c58fdd75c4bcc644fa8135fa11c380cb3ebaf685e400e336031972410ee7'
+
+      - name: Merge verified Homebrew components into install ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/bundle_switchbrew.py \
+            --archive release-assets/Atmosphere-Switch.zip \
+            --hbl release-assets/switchbrew/hbl.nsp \
+            --hbmenu-zip release-assets/switchbrew/nx-hbmenu_v3.6.1.zip \
+            --manifest release-assets/SWITCHBREW-SOURCES.txt
+          rm -rf release-assets/switchbrew
+          sha256sum release-assets/Atmosphere-Switch.zip release-assets/fusee.bin \
+            release-assets/SWITCHBREW-SOURCES.txt > release-assets/SHA256SUMS.txt
+          sha256sum -c release-assets/SHA256SUMS.txt
+          unzip -Z1 release-assets/Atmosphere-Switch.zip | grep -Fx 'atmosphere/hbl.nsp'
+          unzip -Z1 release-assets/Atmosphere-Switch.zip | grep -Fx 'hbmenu.nro'
 
       - name: Upload verified firmware packages
         uses: actions/upload-artifact@v4
@@ -175,18 +210,23 @@ jobs:
           test -s release-assets/Atmosphere-Switch.zip
           test -s release-assets/fusee.bin
           test -s release-assets/SHA256SUMS.txt
+          test -s release-assets/SWITCHBREW-SOURCES.txt
           sha256sum -c release-assets/SHA256SUMS.txt
+          for required in atmosphere/hbl.nsp hbmenu.nro; do
+            unzip -Z1 release-assets/Atmosphere-Switch.zip | grep -Fx "$required"
+          done
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Already released: $TAG"
             exit 0
           fi
-          printf 'Unofficial automated build of Atmosphère from the official upstream master branch.\n\nUpstream: https://github.com/Atmosphere-NX/Atmosphere\nUpstream commit: %s\nBuild commit: %s\n\nAssets: Atmosphere-Switch.zip (package3 and Switch homebrew apps), fusee.bin (separate boot payload), SHA256SUMS.txt. This source-built archive does not bundle Homebrew Menu or Homebrew Launcher; it is not an official Atmosphere release. Test compatibility and verify the target firmware version before use.\n' "$UPSTREAM_SHA" "$BUILD_SHA" > notes.md
+          printf 'Unofficial automated build of Atmosphère from the official upstream master branch.\n\nUpstream: https://github.com/Atmosphere-NX/Atmosphere\nUpstream commit: %s\nBuild commit: %s\n\nThis ZIP includes Atmosphère and official prebuilt Switchbrew HBLoader v2.4.5 and HBMenu v3.6.1; all added assets have pinned SHA256 hashes. See SWITCHBREW-SOURCES.txt for provenance. fusee.bin remains a separate boot payload. This is not an official Atmosphere release. Test compatibility and verify the target firmware version before use.\n' "$UPSTREAM_SHA" "$BUILD_SHA" > notes.md
           gh release create "$TAG" \
             release-assets/Atmosphere-Switch.zip \
             release-assets/fusee.bin \
             release-assets/SHA256SUMS.txt \
+            release-assets/SWITCHBREW-SOURCES.txt \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$BUILD_SHA" \
+            --target master \
             --title "Atmosphere automated build ($TAG)" \
             --notes-file notes.md \
             --latest
