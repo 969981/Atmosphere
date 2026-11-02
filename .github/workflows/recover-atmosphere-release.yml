@@ -1,0 +1,105 @@
+name: Recover and publish verified Atmosphere build artifacts
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/recover-atmosphere-release.yml
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: GitHub Actions run containing a successful build and verified artifacts
+        required: true
+        default: '41404195312'
+        type: string
+      release_tag:
+        description: Upstream commit-based Release tag
+        required: true
+        default: 'upstream-6b0c077b4c60'
+        type: string
+      build_sha:
+        description: Exact commit SHA built by the source run
+        required: true
+        default: 'dfd18cca2c986023f30136e125f9893378423100'
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: atmosphere-recover-release
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    name: Verify previous successful build and publish its existing assets
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id || '41404195312' }}
+      RELEASE_TAG: ${{ inputs.release_tag || 'upstream-6b0c077b4c60' }}
+      BUILD_SHA: ${{ inputs.build_sha || 'dfd18cca2c986023f30136e125f9893378423100' }}
+    steps:
+      - name: Validate successful original build and commit identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_RUN_ID" && test -n "$RELEASE_TAG" && test -n "$BUILD_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" \
+            --jq '.head_sha' | grep -Fx "$BUILD_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100" \
+            --jq '.jobs[] | select(.name=="Build and package Switch firmware with devkitPro") | .conclusion' \
+            | grep -Fx success
+
+      - name: Download the previously verified Atmosphere distribution
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.source_run_id || '41404195312' }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: Atmosphere-release-assets
+          path: release-assets
+
+      - name: Verify checksum and required package components
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s release-assets/Atmosphere-Switch.zip
+          test -s release-assets/fusee.bin
+          test -s release-assets/SHA256SUMS.txt
+          sha256sum -c release-assets/SHA256SUMS.txt
+          for required in atmosphere/package3 atmosphere/reboot_payload.bin switch/daybreak.nro switch/haze.nro switch/reboot_to_payload.nro; do
+            unzip -Z1 release-assets/Atmosphere-Switch.zip | grep -Fx "$required"
+          done
+
+      - name: Publish verified assets without rebuilding
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Already released: $RELEASE_TAG"
+            exit 0
+          fi
+          {
+            echo "Unofficial automated Atmosphere build from the official upstream."
+            echo
+            echo "Verified binary build commit: $BUILD_SHA"
+            echo "The release Git tag targets master at publish time because GitHub Actions"
+            echo "cannot tag a commit whose workflow files differ from the default branch."
+            echo "Source code outside CI workflows is unchanged since the binary build."
+            echo "Original verified build run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID"
+            echo
+            echo "Assets: Atmosphere-Switch.zip, fusee.bin and SHA256SUMS.txt."
+            echo "This source build does not include Homebrew Menu or Homebrew Launcher."
+            echo "Validate your console firmware compatibility before use."
+          } > release-notes.md
+          gh release create "$RELEASE_TAG" \
+            release-assets/Atmosphere-Switch.zip \
+            release-assets/fusee.bin \
+            release-assets/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target master \
+            --title "Atmosphere automated build ($RELEASE_TAG)" \
+            --notes-file release-notes.md \
+            --latest
