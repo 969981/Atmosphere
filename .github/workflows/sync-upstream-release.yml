@@ -1,0 +1,167 @@
+name: Sync upstream and build Atmosphere
+
+on:
+  schedule:
+    # GitHub cron runs from the default branch (currently 11_support), in UTC.
+    - cron: '4,14,24,34,44,54 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [master]
+
+concurrency:
+  group: atmosphere-upstream-sync-and-release
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync Atmosphere-NX master
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      build_sha: ${{ steps.sync.outputs.build_sha }}
+      upstream_sha: ${{ steps.sync.outputs.upstream_sha }}
+      tag: ${{ steps.sync.outputs.tag }}
+      should_build: ${{ steps.sync.outputs.should_build }}
+    steps:
+      - name: Checkout production master branch
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Merge official upstream safely and check release
+        id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream https://github.com/Atmosphere-NX/Atmosphere.git
+          git fetch --no-tags upstream master
+          upstream_sha="$(git rev-parse FETCH_HEAD)"
+          if ! git merge-base --is-ancestor "$upstream_sha" HEAD; then
+            # Preserve local CI and changes; never force-push an upstream update.
+            git merge --no-edit "$upstream_sha"
+            git push origin HEAD:master
+          fi
+          build_sha="$(git rev-parse HEAD)"
+          tag="upstream-${upstream_sha:0:12}"
+          {
+            echo "upstream_sha=$upstream_sha"
+            echo "build_sha=$build_sha"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo 'should_build=false' >> "$GITHUB_OUTPUT"
+            echo "Release already exists: $tag"
+          else
+            echo 'should_build=true' >> "$GITHUB_OUTPUT"
+            echo "Build required: $tag"
+          fi
+
+  build:
+    name: Build and package Switch firmware with devkitPro
+    needs: sync
+    if: needs.sync.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout synchronized production commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync.outputs.build_sha }}
+          fetch-depth: 0
+
+      - name: Build official toolchain image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --tag atmosphere-build-ci --file Dockerfile .
+
+      - name: Compile official release distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --user root \
+            --volume "$PWD:/source" \
+            --workdir /source \
+            atmosphere-build-ci \
+            bash -lc 'set -euo pipefail; make -j2 dist-no-debug-nx_release'
+
+      - name: Verify package3, fusee and all required contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          archive="$(find out -type f -name 'atmosphere-*.zip' -print -quit)"
+          fusee="$(find out -type f -name 'fusee.bin' -print -quit)"
+          if [ -z "$archive" ] || [ -z "$fusee" ]; then
+            echo 'Atmosphere ZIP or fusee.bin missing; refusing to publish.'
+            exit 1
+          fi
+          for required in atmosphere/package3 atmosphere/reboot_payload.bin switch/daybreak.nro switch/haze.nro switch/reboot_to_payload.nro; do
+            unzip -Z1 "$archive" | grep -Fxq "$required" || {
+              echo "Missing required archive entry: $required"
+              exit 1
+            }
+          done
+          test -s "$fusee"
+          cp "$archive" release-assets/Atmosphere-Switch.zip
+          cp "$fusee" release-assets/fusee.bin
+          sha256sum release-assets/* > release-assets/SHA256SUMS.txt
+
+      - name: Upload verified firmware packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: Atmosphere-release-assets
+          path: release-assets/*
+          retention-days: 7
+          if-no-files-found: error
+
+  release:
+    name: Publish unofficial automatic build to Releases
+    needs: [sync, build]
+    if: needs.sync.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified packages
+        uses: actions/download-artifact@v4
+        with:
+          name: Atmosphere-release-assets
+          path: release-assets
+
+      - name: Publish by upstream commit SHA
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.sync.outputs.tag }}
+          BUILD_SHA: ${{ needs.sync.outputs.build_sha }}
+          UPSTREAM_SHA: ${{ needs.sync.outputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          test -s release-assets/Atmosphere-Switch.zip
+          test -s release-assets/fusee.bin
+          test -s release-assets/SHA256SUMS.txt
+          (cd release-assets && sha256sum -c SHA256SUMS.txt)
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Already released: $TAG"
+            exit 0
+          fi
+          printf 'Unofficial automated build of Atmosphère from the official upstream master branch.\n\nUpstream: https://github.com/Atmosphere-NX/Atmosphere\nUpstream commit: %s\nBuild commit: %s\n\nAssets: Atmosphere-Switch.zip (package3 and Switch homebrew apps), fusee.bin (separate boot payload), SHA256SUMS.txt. This source-built archive does not bundle Homebrew Menu or Homebrew Launcher; it is not an official Atmosphere release. Test compatibility and verify the target firmware version before use.\n' "$UPSTREAM_SHA" "$BUILD_SHA" > notes.md
+          gh release create "$TAG" \
+            release-assets/Atmosphere-Switch.zip \
+            release-assets/fusee.bin \
+            release-assets/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$BUILD_SHA" \
+            --title "Atmosphere automated build ($TAG)" \
+            --notes-file notes.md \
+            --latest
