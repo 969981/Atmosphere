@@ -78,11 +78,17 @@ jobs:
           ref: ${{ needs.sync.outputs.build_sha }}
           fetch-depth: 0
 
-      - name: Build official toolchain image
+      - name: Build pinned devkitPro toolchain image
         shell: bash
         run: |
           set -euo pipefail
-          docker build --tag atmosphere-build-ci --file Dockerfile .
+          # The pinned devkita64 base already includes switch-tools and hactool.
+          # The upstream Dockerfile unnecessarily reinstalls them; that package
+          # fetch currently returns HTTP 403 from the devkitPro mirror.
+          # Patch only the ephemeral CI Dockerfile; never modify upstream source.
+          sed '/^RUN dkp-pacman -S switch-tools hactool --noconfirm && dkp-pacman -Syu --noconfirm$/d' Dockerfile > Dockerfile.ci
+          docker build --tag atmosphere-build-ci --file Dockerfile.ci .
+          docker run --rm atmosphere-build-ci bash -lc 'command -v hactool && command -v build_romfs && command -v python2 && command -v aarch64-none-elf-gcc'
 
       - name: Compile official release distribution
         shell: bash
