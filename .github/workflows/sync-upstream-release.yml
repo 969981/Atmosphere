@@ -98,7 +98,7 @@ jobs:
             --volume "$PWD:/source" \
             --workdir /source \
             atmosphere-build-ci \
-            bash -lc 'set -euo pipefail; git config --global --add safe.directory /source; make -j2 dist-no-debug-nx_release'
+            bash -lc 'set -euo pipefail; git config --global --add safe.directory /source; git checkout -B master; git clone --depth 1 https://github.com/switchbrew/libnx.git /tmp/libnx; git -C /tmp/libnx fetch --depth 1 origin b156b4774fb2df7b93402169509266da7547fc4c; git -C /tmp/libnx checkout --detach b156b4774fb2df7b93402169509266da7547fc4c; make -C /tmp/libnx/nx -j2 install; make -j2 dist-no-debug-nx_release'
 
       - name: Verify package3, fusee and all required contents
         shell: bash
