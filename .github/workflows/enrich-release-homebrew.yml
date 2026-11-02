@@ -1,0 +1,98 @@
+name: Add verified Switchbrew Homebrew components to existing Atmosphere Release
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/enrich-release-homebrew.yml
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: An existing Atmosphere Release to enrich
+        required: true
+        default: upstream-6b0c077b4c60
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atmosphere-homebrew-existing-release
+  cancel-in-progress: false
+
+jobs:
+  enrich-release:
+    name: Verify and add official HBLoader and HBMenu to published ZIP
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.release_tag || 'upstream-6b0c077b4c60' }}
+    steps:
+      - name: Checkout trusted packaging scripts
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Recover existing published assets and verify original hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern Atmosphere-Switch.zip --pattern fusee.bin \
+            --pattern SHA256SUMS.txt --dir release-assets
+          sha256sum -c release-assets/SHA256SUMS.txt
+
+      - name: Download and attest official Switchbrew assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets/switchbrew
+          gh release download v2.4.5 --repo switchbrew/nx-hbloader \
+            --pattern hbl.nsp --dir release-assets/switchbrew
+          gh release download v3.6.1 --repo switchbrew/nx-hbmenu \
+            --pattern nx-hbmenu_v3.6.1.zip --dir release-assets/switchbrew
+          test "$(gh api repos/switchbrew/nx-hbloader/releases/tags/v2.4.5 \
+            --jq '.assets[] | select(.name=="hbl.nsp") | .digest')" = \
+            'sha256:853df8526557b82c6b2018a8a102d22e8306687415e49653530dfd9a1d603b32'
+          test "$(gh api repos/switchbrew/nx-hbmenu/releases/tags/v3.6.1 \
+            --jq '.assets[] | select(.name=="nx-hbmenu_v3.6.1.zip") | .digest')" = \
+            'sha256:4790c58fdd75c4bcc644fa8135fa11c380cb3ebaf685e400e336031972410ee7'
+
+      - name: Merge official Homebrew and recheck entire distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/bundle_switchbrew.py \
+            --archive release-assets/Atmosphere-Switch.zip \
+            --hbl release-assets/switchbrew/hbl.nsp \
+            --hbmenu-zip release-assets/switchbrew/nx-hbmenu_v3.6.1.zip \
+            --manifest release-assets/SWITCHBREW-SOURCES.txt
+          rm -rf release-assets/switchbrew
+          sha256sum release-assets/Atmosphere-Switch.zip release-assets/fusee.bin \
+            release-assets/SWITCHBREW-SOURCES.txt > release-assets/SHA256SUMS.txt
+          sha256sum -c release-assets/SHA256SUMS.txt
+          unzip -Z1 release-assets/Atmosphere-Switch.zip | grep -Fx 'atmosphere/hbl.nsp'
+          unzip -Z1 release-assets/Atmosphere-Switch.zip | grep -Fx 'hbmenu.nro'
+
+      - name: Replace installation ZIP and update release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" \
+            release-assets/Atmosphere-Switch.zip \
+            release-assets/SHA256SUMS.txt \
+            release-assets/SWITCHBREW-SOURCES.txt \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | grep -Fx 'SWITCHBREW-SOURCES.txt'
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > release-notes.md
+          if ! grep -q 'Switchbrew HBLoader v2.4.5' release-notes.md; then
+            {
+              echo
+              echo 'Update: Atmosphere-Switch.zip now includes official Switchbrew HBLoader v2.4.5'
+              echo 'and HBMenu v3.6.1, pinned by SHA256. See SWITCHBREW-SOURCES.txt.'
+            } >> release-notes.md
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md
+          fi
