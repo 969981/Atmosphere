@@ -41,7 +41,8 @@ jobs:
           mkdir -p release-assets
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
             --pattern Atmosphere-Switch.zip --pattern fusee.bin \
-            --pattern SHA256SUMS.txt --dir release-assets
+            --pattern SHA256SUMS.txt --pattern SWITCHBREW-SOURCES.txt \
+            --dir release-assets
           sha256sum -c release-assets/SHA256SUMS.txt
 
       - name: Download and attest official Switchbrew assets
