@@ -90,6 +90,25 @@ jobs:
           docker build --tag atmosphere-build-ci --file Dockerfile.ci .
           docker run --rm atmosphere-build-ci bash -lc 'command -v hactool && command -v build_romfs && command -v python2 && test -d /opt/devkitpro/devkitA64'
 
+      - name: Order Haze shader generation before recursive NRO build
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Haze's recursive build starts concurrently with ROMFS shader generation
+          # under make -j2. The submake has no rule to generate the .dksh itself.
+          # Patch only the CI checkout; leave upstream sources unchanged in Git.
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("troposphere/haze/Makefile")
+          text = path.read_text()
+          before = "$(BUILD):\n\t@[ -d $@ ] || mkdir -p $@"
+          after = "$(BUILD): $(ROMFS_TARGETS)\n\t@[ -d $@ ] || mkdir -p $@"
+          if text.count(before) != 1:
+              raise SystemExit("Haze Makefile layout changed; review shader dependency fix")
+          path.write_text(text.replace(before, after))
+          print("Haze shader dependencies must finish before recursive NRO build.")
+          PY
+
       - name: Compile official release distribution
         shell: bash
         run: |
