@@ -88,11 +88,13 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
             --jq '.assets[].name' | grep -Fx 'SWITCHBREW-SOURCES.txt'
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > release-notes.md
+          # An old source-only release note becomes inaccurate after bundling.
+          sed -i '/This source build does not include Homebrew Menu or Homebrew Launcher\./d' release-notes.md
           if ! grep -q 'Switchbrew HBLoader v2.4.5' release-notes.md; then
             {
               echo
               echo 'Update: Atmosphere-Switch.zip now includes official Switchbrew HBLoader v2.4.5'
               echo 'and HBMenu v3.6.1, pinned by SHA256. See SWITCHBREW-SOURCES.txt.'
             } >> release-notes.md
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md
           fi
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md
